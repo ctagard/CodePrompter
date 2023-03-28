@@ -1,0 +1,135 @@
+You are going to act as a programmer with expertise in rust projects. Below I will provide all of the project files in my repository that pertain to my questions, and you will answer them as efficiently as possible. If you are asked to write code, FIRST implementthe tests for the proposed code IF APPLICABLE, then write the code in a normal testdriven development fashion. Ask any clarifying questions you have about the project or the question before you implement anything, but if you do not have any questions just implementthe solution.
+./Cargo.toml
+==========
+[package]
+name = "code_prompter"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = "3.0"
+walkdir = "2.3"
+ignore = "0.4.18"
+
+./src/main.rs
+==========
+use clap::{App, Arg};
+use ignore::gitignore::Gitignore;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::Path;
+use walkdir::WalkDir;
+
+fn main() -> io::Result<()> {
+    let matches = App::new("CodePrompter")
+        .version("1.0")
+        .author("Cole Agard <cole.thomas.agard@gmail.com>")
+        .about("Generates a prompt file for Rust, Go, and JavaScript projects for use with GPT.")
+        .arg(
+            Arg::new("type")
+                .short('t')
+                .long("type")
+                .value_name("TYPE")
+                .help("Sets the project type (rust, go, or js)")
+                .required(true)
+                .takes_value(true),
+        )
+        .arg(
+            Arg::new("model")
+                .short('m')
+                .long("model")
+                .value_name("MODEL")
+                .help("Sets the model type (ChatGPT3.5 or ChatGPT4.0)")
+                .required(true)
+                .takes_value(true),
+        )
+        .get_matches();
+
+    let project_type = matches.value_of("type").unwrap();
+    let model = matches.value_of("model").unwrap();
+    let word_limit = match model {
+        "ChatGPT3.5" => 500,
+        "ChatGPT4.0" => 15000,
+        _ => {
+            eprintln!("Invalid model type. Supported types: ChatGPT3.5, ChatGPT4.0");
+            std::process::exit(1);
+        }
+    };
+
+    let (extensions, file_names) = match project_type {
+        "rust" => (vec!["rs"], vec!["Cargo.toml"]),
+        "go" => (vec!["go"], vec!["go.mod"]),
+        "js" => (vec!["js", "jsx", "ts", "tsx"], vec!["package.json"]),
+        _ => {
+            eprintln!("Invalid project type. Supported types: rust, go, js");
+            std::process::exit(1);
+        }
+    };
+
+    let (gitignore, _error) = Gitignore::new(&Path::new(".gptignore"));
+    let mut prompt_file = File::create("prompt.txt")?;
+    // Write the leader prompt.
+    writeln!(prompt_file,
+             "You are going to act as a programmer with expertise in {} projects. Below I will provide all \
+              of the project files in my repository that pertain to my questions, and you will \
+              answer them as efficiently as possible. If you are asked to write code, FIRST implement\
+              the tests for the proposed code IF APPLICABLE, then write the code in a normal test\
+              driven development fashion. Ask any clarifying questions you have about the project or the \
+              question before you implement anything, but if you do not have any questions just implement\
+              the solution.", project_type)?;
+    let mut word_count = 0;
+
+    for entry in WalkDir::new(".") {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_file() && !should_ignore(&gitignore, path)? {
+            let extension = path.extension().and_then(|os_str| os_str.to_str());
+            if let Some(ext) = extension {
+                if extensions.contains(&ext) || file_names.contains(&path.file_name().unwrap().to_str().unwrap()){
+                    writeln!(prompt_file, "{}", path.display())?;
+                    writeln!(prompt_file, "{}", "=".repeat(10))?;
+                    let reader = BufReader::new(File::open(path)?);
+                    for line in reader.lines() {
+                        let line = line?;
+                        word_count += line.split_whitespace().count();
+                        writeln!(prompt_file, "{}", line)?;
+                    }
+                    writeln!(prompt_file, "")?;
+                    }
+            }
+        }
+    }
+
+    if word_count > word_limit {
+        eprintln!(
+            "Warning: The total word count of the prompt ({}) exceeds the limit for the selected model ({} words).",
+            word_count, word_limit
+        );
+    }
+
+    let mut question = String::new();
+    println!("Enter a question to append to the end of the file: ");
+    io::stdin().lock().read_line(&mut question)?;
+
+    writeln!(
+        prompt_file,
+        "Given the {} project above as context code, {}",
+        project_type,
+        question.trim()
+    )?;
+
+    Ok(())
+}
+
+fn should_ignore(gitignore: &Gitignore, path: &Path) -> io::Result<bool> {
+
+    let path = path.canonicalize()?;
+    let is_dir = path.is_dir();
+    let result = gitignore.matched(path, is_dir);
+    Ok(result.is_ignore())
+}
+
+Given the rust project above as context code, How quick can the brown fox jump?
